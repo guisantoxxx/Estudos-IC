@@ -219,7 +219,19 @@ def nn_forward_backward(
     # (Check Numeric Stability in http://cs231n.github.io/linear-classify/).   #
     ############################################################################
     # Replace "pass" statement with your code
-    pass
+
+    shifted_scores = scores - torch.max(scores, dim=1, keepdim=True)[0]
+    exp_scores = torch.exp(shifted_scores)
+    
+    # Calcula as probabilidades normalizadas para cada amostra
+    probs = exp_scores / torch.sum(exp_scores, dim=1, keepdim=True)
+    
+    # Calcula a loss para as classes corretas
+    correct_logprobs = -torch.log(probs[torch.arange(N), y])
+    data_loss = torch.sum(correct_logprobs) / N
+    # Adiciona a regularização L2 (sem coeficiente 1/2)
+    reg_loss = reg * (torch.sum(W1 * W1) + torch.sum(W2 * W2))
+    loss = data_loss + reg_loss
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -233,7 +245,22 @@ def nn_forward_backward(
     # tensor of same size                                                     #
     ###########################################################################
     # Replace "pass" statement with your code
-    pass
+    dscores = probs.clone()
+    dscores[torch.arange(N), y] -= 1
+    dscores /= N
+
+    # Gradientes da segunda camada
+    grads['W2'] = h1.t().mm(dscores) + 2 * reg * W2
+    grads['b2'] = torch.sum(dscores, dim=0)
+
+    # Propaga o gradiente para a camada oculta
+    dh1 = dscores.mm(W2.t())
+    # Se a função de ativação for ReLU, zere os gradientes onde h1 <= 0
+    dh1[h1 <= 0] = 0
+
+    # Gradientes da primeira camada
+    grads['W1'] = X.t().mm(dh1) + 2 * reg * W1
+    grads['b1'] = torch.sum(dh1, dim=0)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -314,7 +341,8 @@ def nn_train(
         # stored in the grads dictionary defined above.                         #
         #########################################################################
         # Replace "pass" statement with your code
-        pass
+        for key in params:
+            params[key] -= learning_rate * grads[key]
         #########################################################################
         #                             END OF YOUR CODE                          #
         #########################################################################
@@ -372,7 +400,14 @@ def nn_predict(
     # TODO: Implement this function; it should be VERY simple!                #
     ###########################################################################
     # Replace "pass" statement with your code
-    pass
+    hidden_pre = torch.mm(X, params['W1']) + params['b1']  # (N, H)
+
+    # Aplica a funcao de ativacao
+    hidden = torch.clamp(hidden_pre, min=0)  # ReLU sem usar torch.relu
+
+    scores = torch.mm(hidden, params['W2']) + params['b2']
+
+    y_pred = torch.argmax(scores, dim=1)
     ###########################################################################
     #                              END OF YOUR CODE                           #
     ###########################################################################
@@ -406,7 +441,10 @@ def nn_get_search_params():
     # classifier.                                                             #
     ###########################################################################
     # Replace "pass" statement with your code
-    pass
+    learning_rates = [1e-3, 5e-3, 1e-2]
+    hidden_sizes = [50, 100, 150]
+    regularization_strengths = [0.1, 0.5, 1.0]
+    learning_rate_decays = [1.0, 0.95, 0.9]
     ###########################################################################
     #                           END OF YOUR CODE                              #
     ###########################################################################
@@ -467,7 +505,37 @@ def find_best_net(
     # automatically like we did on the previous exercises.                      #
     #############################################################################
     # Replace "pass" statement with your code
-    pass
+        # Obtém os hiperparâmetros candidatos
+    learning_rates, hidden_sizes, regularization_strengths, learning_rate_decays = get_param_set_fn()
+
+    # Itera sobre todas as combinações de hiperparâmetros
+    for lr in learning_rates:
+        for hidden_size in hidden_sizes:
+            for reg in regularization_strengths:
+                for lr_decay in learning_rate_decays:
+                    # Inicializa um novo modelo
+                    net = TwoLayerNet(
+                        input_size=data_dict["X_train"].shape[1],
+                        hidden_size=hidden_size,
+                        output_size=len(torch.unique(data_dict["y_train"])),
+                    )
+
+                    # Treina o modelo
+                    stats = net.train(
+                        data_dict["X_train"], data_dict["y_train"],
+                        learning_rate=lr, learning_rate_decay=lr_decay,
+                        reg=reg, num_iters=1000, batch_size=200
+                    )
+
+                    # Calcula a acurácia no conjunto de validação
+                    y_val_pred = net.predict(data_dict["X_val"])
+                    val_acc = (y_val_pred == data_dict["y_val"]).float().mean().item()
+
+                    # Atualiza o melhor modelo se a acurácia for maior
+                    if val_acc > best_val_acc:
+                        best_val_acc = val_acc
+                        best_net = net
+                        best_stat = stats
     #############################################################################
     #                               END OF YOUR CODE                            #
     #############################################################################
